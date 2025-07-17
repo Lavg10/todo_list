@@ -33,6 +33,13 @@ class _RegisterPageState extends State<RegisterPage> {
       );
 
       if (response.user != null) {
+        final userId = response.user!.id;
+        await Supabase.instance.client.from('profiles').insert({
+          'id': userId,
+          'full_name': '',
+          'avatar_url': '',
+        });
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Registration Successful! Login now')),
         );

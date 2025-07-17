@@ -1,42 +1,81 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shimmer/shimmer.dart'; // add this package in pubspec.yaml
 import 'login_page.dart';
+import 'profile_screen.dart';
 
 class TodoPage extends StatefulWidget {
   @override
   State<TodoPage> createState() => _TodoPageState();
 }
 
-class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
+class _TodoPageState extends State<TodoPage> {
   final taskController = TextEditingController();
   List todos = [];
+  bool isLoading = false;
+  bool hasMore = true;
+  int pageSize = 10;
+  int page = 0;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     fetchTodos();
+    _scrollController.addListener(() {
+      if (_scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 200 &&
+          !isLoading &&
+          hasMore) {
+        fetchTodos();
+      }
+    });
   }
 
-  void fetchTodos() async {
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    taskController.dispose();
+    super.dispose();
+  }
+
+  Future<void> fetchTodos() async {
+    if (isLoading) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
     try {
       final userId = Supabase.instance.client.auth.currentUser!.id;
-      final List<dynamic> response = await Supabase.instance.client
+
+      final response = await Supabase.instance.client
           .from('todo')
           .select()
           .eq('user_id', userId)
-          .order('created_at', ascending: false);
+          .order('created_at', ascending: false)
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+      if (response.length < pageSize) {
+        hasMore = false;
+      }
 
       setState(() {
-        todos = response;
+        todos.addAll(response);
+        page++;
       });
     } catch (error) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to fetch todos: $error')));
     }
+
+    setState(() {
+      isLoading = false;
+    });
   }
 
-  void addTodo() async {
+  Future<void> addTodo() async {
     final task = taskController.text.trim();
     final userId = Supabase.instance.client.auth.currentUser!.id;
 
@@ -50,6 +89,13 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
       });
 
       taskController.clear();
+
+      // Reset pagination and reload todos
+      setState(() {
+        todos.clear();
+        page = 0;
+        hasMore = true;
+      });
       fetchTodos();
     } catch (error) {
       ScaffoldMessenger.of(
@@ -65,11 +111,34 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
           .update({'status': newStatus})
           .eq('id', id);
 
+      // Reload todos
+      setState(() {
+        todos.clear();
+        page = 0;
+        hasMore = true;
+      });
       fetchTodos();
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update status: $error')),
       );
+    }
+  }
+
+  Future<void> deleteTodo(int id) async {
+    try {
+      await Supabase.instance.client.from('todo').delete().eq('id', id);
+
+      setState(() {
+        todos.clear();
+        page = 0;
+        hasMore = true;
+      });
+      fetchTodos();
+    } catch (error) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to delete todo: $error')));
     }
   }
 
@@ -101,6 +170,27 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
     }
   }
 
+  Widget buildShimmer() {
+    return ListView.builder(
+      itemCount: 6,
+      itemBuilder: (context, index) {
+        return Shimmer.fromColors(
+          baseColor: Colors.white54,
+          highlightColor: Colors.white70,
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            height: 70,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+        );
+      },
+      controller: _scrollController,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -111,7 +201,18 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
         centerTitle: true,
         elevation: 0,
         backgroundColor: Colors.transparent,
-        actions: [IconButton(icon: Icon(Icons.logout), onPressed: logout)],
+        actions: [
+          IconButton(
+            icon: Icon(Icons.person),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => ProfilePage()),
+              );
+            },
+          ),
+          IconButton(icon: Icon(Icons.logout), onPressed: logout),
+        ],
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -163,7 +264,9 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
                 ),
                 const SizedBox(height: 20),
                 Expanded(
-                  child: todos.isEmpty
+                  child: todos.isEmpty && isLoading
+                      ? buildShimmer()
+                      : todos.isEmpty
                       ? Center(
                           child: Text(
                             'No tasks yet. Start adding!',
@@ -175,8 +278,21 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
                           ),
                         )
                       : ListView.builder(
-                          itemCount: todos.length,
+                          controller: _scrollController,
+                          itemCount: todos.length + (hasMore ? 1 : 0),
                           itemBuilder: (_, index) {
+                            if (index == todos.length) {
+                              // show loading indicator
+                              return Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              );
+                            }
+
                             final todo = todos[index];
                             final isCompleted = todo['status'] == 'completed';
 
@@ -249,11 +365,7 @@ class _TodoPageState extends State<TodoPage> with TickerProviderStateMixin {
                                         TextButton(
                                           onPressed: () async {
                                             Navigator.pop(ctx);
-                                            await Supabase.instance.client
-                                                .from('todo')
-                                                .delete()
-                                                .eq('id', todo['id']);
-                                            fetchTodos();
+                                            await deleteTodo(todo['id']);
                                           },
                                           child: const Text(
                                             'Yes',
