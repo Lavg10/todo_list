@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'login_page.dart';
-import 'register_page.dart';
+// import 'register_page.dart';
 import 'todo_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
